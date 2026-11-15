@@ -1,11 +1,15 @@
 name: Refresh dashboard data
 
 on:
-  # Manual trigger from Actions tab — your "refresh now" button
+  # Manual trigger from Actions tab — your "refresh now" button.
+  # A scheduled job on the office Mac presses this button at 10:00 Pacific
+  # every day through April 1, 2027.
   workflow_dispatch:
-  # Auto-refresh every Sunday at 7am Pacific (15:00 UTC)
+  # Daily backup run at 18:00 UTC (10am PST / 11am PDT) in case the Mac is off.
+  # GitHub starts scheduled runs late, often by 2 to 4 hours.
+  # After April 1, 2027 the gate below lets scheduled runs through on Sundays only.
   schedule:
-    - cron: '0 15 * * 0'
+    - cron: '0 18 * * *'
 
 permissions:
   contents: write
@@ -14,21 +18,38 @@ jobs:
   refresh:
     runs-on: ubuntu-latest
     steps:
+      - name: Daily through Apr 1 2027, then Sundays only
+        id: gate
+        run: |
+          today=$(TZ=America/Los_Angeles date +%Y%m%d)
+          dow=$(TZ=America/Los_Angeles date +%u)
+          if [ "${{ github.event_name }}" = "schedule" ] && [ "$today" -gt 20270401 ] && [ "$dow" != "7" ]; then
+            echo "Daily refresh window ended Apr 1 2027; skipping non-Sunday scheduled run."
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Checkout repo
+        if: steps.gate.outputs.run == 'true'
         uses: actions/checkout@v4
 
       - name: Set up Python
+        if: steps.gate.outputs.run == 'true'
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
       - name: Install dependencies
+        if: steps.gate.outputs.run == 'true'
         run: pip install -r requirements.txt
 
       - name: Run refresh script
+        if: steps.gate.outputs.run == 'true'
         run: python3 refresh_dashboard.py
 
       - name: Commit & push if changed
+        if: steps.gate.outputs.run == 'true'
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"

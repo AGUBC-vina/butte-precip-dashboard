@@ -371,7 +371,11 @@ def build_data():
                     arr[i] = None
             valid = [v for v in arr if v is not None]
             total = max(valid) if valid else 0.0
-            year_entry = {'cumulative_daily': arr, 'total': round(total, 2)}
+            # n_obs / last_obs let the page tell a silent gauge from a dry year:
+            # a monthly station with no reports still produces an all-zero series.
+            year_entry = {'cumulative_daily': arr, 'total': round(total, 2),
+                          'n_obs': len(rows),
+                          'last_obs': rows[-1][0][:8] if rows else None}
             storms = compute_storms(rows, wy, code, meta)
             if storms:
                 year_entry['storms'] = storms
