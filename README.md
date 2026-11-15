@@ -37,12 +37,41 @@ compare the year's total with the full-year average. A station that reported
 no readings in a water year is shown as "No readings reported" rather than
 as zero.
 
+Only water years whose record runs the whole year go into an average.
+Openshaw's CDEC record starts January 20, 2016, so its average starts with
+WY2017 and its WY2016 bar is left off the totals chart.
+
+## Comparison periods
+
+The "Compare with" selector and the comparison table set the current year
+against these averages, each built the same way as the main one:
+
+- Last 5 years and last 10 years: the completed years before the current one.
+- SGMA period: WY2015 through the last completed year.
+- WY2007–2022: Cohasset and Carpenter Ridge only, the two stations with a
+  complete record for those years. The label "driest 16 years since
+  WY1929–1944" is an AGUBC calculation from DWR's Northern Sierra 8-Station
+  Index (CDEC station 8SI, monthly, WY1920–2026, retrieved 2026-11-15): the
+  only 16-year spans with a lower average start in WY1920 through WY1929.
+
+Years before WY2016 are fetched once for these averages and frozen in
+`cdec_cache/`; they are not shown as their own water years. The periods are
+defined in `comparison_periods()` in `refresh_dashboard.py`.
+
+## Gauge corrections
+
+`GAUGE_READD` in `refresh_dashboard.py` lists readings where a gauge was reset
+to zero mid-season and its earlier total was later added back in one step.
+The add-back is removed so it is not counted as rain. The one entry so far is
+Cohasset on 2009-05-07, which would otherwise put WY2009 at 43.14" instead of
+33.58". Raw cache files are not changed.
+
 ## Files
 
 - `index.html` — the dashboard (self-contained, single file)
 - `refresh_dashboard.py` — fetches new data, applies spike filter, rebuilds the HTML
 - `requirements.txt` — Python dependencies (`requests` only)
-- `cdec_cache/` — frozen raw data for completed water years (one JSON per station per WY)
+- `cdec_cache/` — frozen raw data for completed water years (one JSON per station per WY), including WY2007–2015 for the comparison periods
 - `.github/workflows/refresh.yml` — scheduled + manual refresh job
 
 ## Running locally

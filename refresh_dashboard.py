@@ -48,6 +48,61 @@ STATIONS = {
 }
 START_WY = 2016
 
+# ------- Comparison periods (Tovey, 2026-11-15) -------
+# Each period is averaged day by day like the main historical average and set
+# beside the current year. Completed water years only; the current year is
+# never in a period. 'stations' limits a period to the stations named; None
+# means every station whose record covers every year of the period.
+#   - Last 5 / last 10 = the completed years before the current one.
+#   - SGMA period starts with WY2015 (Tovey).
+#   - WY2007-2022 uses Cohasset and Carpenter Ridge only (Tovey): Paradise's
+#     CDEC record starts 2008-10 and Openshaw's 2014-04.
+#   - WY1985-1994 was considered and dropped (Tovey).
+# DRY_PERIOD_NOTE is an AGUBC calculation from CDEC station 8SI (Northern
+# Sierra 8-Station Index), sensor 2, monthly, WY1920-2026, retrieved 2026-11-15:
+# WY2007-2022 averaged 47.62"/yr; the only drier 16-year spans are the nine
+# starting WY1920-1929, the last of them WY1929-1944 (46.70"/yr).
+DRY_PERIOD_NOTE = ('Driest 16 years in DWR’s Northern Sierra 8-Station '
+                   'Index since WY1929–1944 (AGUBC calculation from DWR '
+                   'monthly data, WY1920–2026)')
+
+
+def comparison_periods(cur_wy):
+    last = cur_wy - 1
+    return [
+        {'key': 'last5', 'label': 'Last 5 years', 'short': '5-yr avg',
+         'first': last - 4, 'last': last, 'stations': None},
+        {'key': 'last10', 'label': 'Last 10 years', 'short': '10-yr avg',
+         'first': last - 9, 'last': last, 'stations': None},
+        {'key': 'sgma', 'label': 'SGMA period', 'short': 'SGMA-period avg',
+         'first': 2015, 'last': last, 'stations': None},
+        {'key': 'dry16', 'label': 'WY2007–2022',
+         'tag': 'driest 16 years since WY1929–1944',
+         'short': '2007–22 avg', 'first': 2007, 'last': 2022,
+         'stations': ['CST', 'CAR'], 'note': DRY_PERIOD_NOTE},
+    ]
+
+# ------- Known gauge glitches (checked by hand against the raw CDEC record) -------
+# A gauge reset to zero mid-season whose earlier total was later added back in
+# one step. The add-back is not rain; it is removed from that reading until the
+# gauge's next reset. Raw cache files are left untouched.
+#   CST 2009: read 9.56" at 2009-01-20 10:00, reset to 0.00" at 11:00, then
+#   jumped 22.81" -> 32.37" (+9.56") at 2009-05-07 09:00. Without this, WY2009
+#   reads 43.14" instead of 33.58" (CDEC CST sensor 2 hourly, read 2026-11-15).
+GAUGE_READD = {('CST', '20090507 0900'): 9.56}
+
+
+def apply_gauge_fixes(code, rows):
+    out, active, prev = [], 0.0, None
+    for t, v in rows:
+        if (code, t) in GAUGE_READD:
+            active = GAUGE_READD[(code, t)]
+        elif active and prev is not None and v < prev - 1.0:
+            active = 0.0            # the gauge's next reset ends the correction
+        prev = v
+        out.append([t, round(v - active, 2)])
+    return out
+
 # ------- NOAA Atlas 14 precipitation-frequency thresholds -------
 # Point estimates (inches) from the NOAA Precipitation Frequency Data Server,
 # NOAA Atlas 14 Volume 6 Version 2, partial-duration series, retrieved
@@ -170,6 +225,24 @@ def cache_is_final(blob, wy, dur):
     return last >= date(wy, 9, 28)
 
 
+def year_complete(rows, wy, dur):
+    """True if a completed water year's record runs the whole year.
+
+    A station that started or stopped partway through a year still returns
+    rows, and its partial total would drag a period average down.
+    """
+    if not rows:
+        return False
+    try:
+        first = datetime.strptime(rows[0][0], '%Y%m%d %H%M').date()
+        last = datetime.strptime(rows[-1][0], '%Y%m%d %H%M').date()
+    except Exception:
+        return False
+    if dur == 'M':
+        return first <= date(wy - 1, 10, 1) and last >= date(wy, 8, 1)
+    return first <= date(wy - 1, 10, 31) and last >= date(wy, 8, 31)
+
+
 def fetch_or_cache(code, wy, meta):
     """Use cached file only if it covers the completed WY. Otherwise fetch."""
     path = os.path.join(CACHE_DIR, f'{code}_{wy}.json')
@@ -179,7 +252,7 @@ def fetch_or_cache(code, wy, meta):
         except (ValueError, OSError):
             blob = None
         if blob and cache_is_final(blob, wy, meta['dur']):
-            return blob['rows'], 'cached'
+            return apply_gauge_fixes(code, blob['rows']), 'cached'
     # Current WY, missing cache, or a cache that stopped short of Sep 30
     start = f'{wy-1}-10-01'
     end = min(f'{wy}-09-30', date.today().isoformat())
@@ -187,7 +260,7 @@ def fetch_or_cache(code, wy, meta):
     with open(path, 'w') as f:
         json.dump({'rows': rows, 'station': code, 'wy': wy,
                    'final': is_completed_wy(wy)}, f)
-    return rows, 'fetched'
+    return apply_gauge_fixes(code, rows), 'fetched'
 
 # ------- Spike filter + cumulative calc -------
 def clean_spikes(parsed):
@@ -389,6 +462,8 @@ def build_data():
             year_entry = {'cumulative_daily': arr, 'total': round(total, 2),
                           'n_obs': len(rows),
                           'last_obs': rows[-1][0][:8] if rows else None}
+            if wy != end_wy:
+                year_entry['complete'] = year_complete(rows, wy, meta['dur'])
             storms = compute_storms(rows, wy, code, meta)
             if storms:
                 year_entry['storms'] = storms
@@ -397,18 +472,60 @@ def build_data():
             print(f'  WY{wy} {tag}: total={total:.2f}"')
         out['stations'][code] = station_data
 
-    # Historical averages: all completed water years
+    # Historical averages: completed water years whose record runs the whole
+    # year. Openshaw's CDEC record starts 2016-01-20, so its WY2016 is left
+    # out; counting it would add a zero for every day before Jan 20.
     complete_ys = [str(wy) for wy in water_years if is_completed_wy(wy, today)]
     for code, sdata in out['stations'].items():
+        ys = [y for y in complete_ys if sdata['years'].get(y, {}).get('complete')]
+        sdata['avg_years'] = [int(ys[0]), int(ys[-1]), len(ys)] if ys else None
         averages = []
         for day_idx in range(366):
             vals = []
-            for y in complete_ys:
-                v = sdata['years'].get(y, {}).get('cumulative_daily', [None])[day_idx]
+            for y in ys:
+                v = sdata['years'][y]['cumulative_daily'][day_idx]
                 if v is not None:
                     vals.append(v)
             averages.append(round(sum(vals)/len(vals), 2) if vals else None)
         sdata['historical_avg'] = averages
+
+    # Comparison periods: years before START_WY are fetched once, frozen in
+    # cdec_cache/ like the rest, and used only for these averages.
+    periods = comparison_periods(end_wy)
+    out['compare_periods'] = [
+        {k: p[k] for k in ('key', 'label', 'tag', 'short', 'first', 'last', 'note')
+         if k in p} for p in periods]
+    for code, meta in STATIONS.items():
+        sdata = out['stations'][code]
+        needed = set()
+        for p in periods:
+            if p['stations'] is None or code in p['stations']:
+                needed.update(range(p['first'], p['last'] + 1))
+        arrays = {}
+        for wy in sorted(needed):
+            entry = sdata['years'].get(str(wy))
+            if entry is not None:
+                arrays[wy] = entry['cumulative_daily'] if entry.get('complete') else None
+                continue
+            rows, source = fetch_or_cache(code, wy, meta)
+            if source == 'fetched': fetch_count += 1
+            else: cache_count += 1
+            arr = (process_accumulated(rows, wy) if meta['kind'] == 'accumulated'
+                   else process_monthly(rows, wy))
+            ok = year_complete(rows, wy, meta['dur'])
+            arrays[wy] = arr if ok else None
+            print(f'  {code} WY{wy} (comparison only) [{source}]: '
+                  f'total={max(arr) if ok else 0:.2f}" complete={ok}')
+        compare = {}
+        for p in periods:
+            ys = list(range(p['first'], p['last'] + 1))
+            if ((p['stations'] is not None and code not in p['stations'])
+                    or any(arrays.get(y) is None for y in ys)):
+                compare[p['key']] = None
+                continue
+            compare[p['key']] = [round(sum(arrays[y][i] for y in ys) / len(ys), 2)
+                                 for i in range(366)]
+        sdata['compare'] = compare
 
     print(f'\nSummary: {fetch_count} fetched, {cache_count} cached')
     return out
@@ -419,8 +536,10 @@ def update_html(data):
         sys.exit(1)
     html = open(DASHBOARD_FILE).read()
     data_json = json.dumps(data, separators=(',', ':'))
+    # A function replacement, so backslashes in the data (e.g. ’) are
+    # inserted as-is instead of being read as regex escapes.
     new_html, n = re.subn(r'const DATA = \{.*?\};',
-                          f'const DATA = {data_json};',
+                          lambda m: f'const DATA = {data_json};',
                           html, count=1, flags=re.DOTALL)
     if n != 1:
         print('ERROR: could not find DATA placeholder in HTML')
