@@ -14,7 +14,7 @@ Usage:
 Run whenever you want to pull fresh data. Completed water years are never
 re-fetched, so CDEC is hit with minimal traffic (5 requests per refresh).
 """
-import csv, json, os, re, sys
+import csv, json, os, re, sys, time
 from datetime import datetime, timedelta, date
 from io import StringIO
 
@@ -117,11 +117,24 @@ def is_completed_wy(wy, today=None):
 # ------- CDEC fetch -------
 API = 'https://cdec.water.ca.gov/dynamicapp/req/CSVDataServlet'
 
-def fetch(station, sensor, dur, start, end):
-    r = requests.get(API, params={'Stations': station, 'SensorNums': sensor,
-                                   'dur_code': dur, 'Start': start, 'End': end},
-                     timeout=60)
-    r.raise_for_status()
+def fetch(station, sensor, dur, start, end, retries=5):
+    # CDEC drops connections under load ("Remote end closed connection"),
+    # so retry with backoff and pause briefly between stations.
+    delay = 5.0
+    for attempt in range(retries):
+        try:
+            r = requests.get(API, params={'Stations': station, 'SensorNums': sensor,
+                                           'dur_code': dur, 'Start': start, 'End': end},
+                             timeout=90)
+            r.raise_for_status()
+            break
+        except requests.RequestException as exc:
+            if attempt == retries - 1:
+                raise
+            print(f'  CDEC request for {station} failed ({exc}); retrying in {delay:.0f}s')
+            time.sleep(delay)
+            delay *= 2
+    time.sleep(2)
     rows = []
     for row in csv.DictReader(StringIO(r.text)):
         try:
