@@ -9,10 +9,16 @@ with a historical-average overlay for context.
 
 ## How it stays current
 
-Historical water years are frozen in `cdec_cache/` and never re-fetched.
-Only the current (in-progress) water year is pulled from CDEC on each
-refresh. The spike filter cleans out single-point sensor glitches before
-computing cumulative totals.
+Completed water years are frozen in `cdec_cache/` and not re-fetched once
+their readings reach the end of September, or once they were fetched at least
+60 days after September 30 (a record still short by then is short at CDEC;
+`CACHE_SETTLE_DAYS`). A monthly station's September total posts weeks after
+September 30, so a year saved earlier is pulled again until then. The current
+(in-progress) water year is pulled from CDEC on each refresh. The spike filter
+cleans out single-point sensor glitches before computing cumulative totals.
+
+The page's "Sources and methods" section, at the bottom, explains the data
+and calculations in plain terms.
 
 Through April 1, 2027 the dashboard refreshes daily at 10am Pacific: a
 scheduled job on a Mac starts the GitHub Actions workflow
@@ -36,6 +42,10 @@ total to date with the average for the same day; for a completed year they
 compare the year's total with the full-year average. A station that reported
 no readings in a water year is shown as "No readings reported" rather than
 as zero.
+
+Days are counted on a 365-day water year: in leap years February 29 shares
+February 28's slot (`wy_day_index`), so every year lines up by date when
+averaged.
 
 Only water years whose record runs the whole year go into an average.
 Openshaw's CDEC record starts January 20, 2016, so its average starts with

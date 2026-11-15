@@ -14,7 +14,7 @@ Usage:
 Run whenever you want to pull fresh data. Completed water years are never
 re-fetched, so CDEC is hit with minimal traffic (5 requests per refresh).
 """
-import csv, json, os, re, sys, time
+import calendar, csv, json, os, re, sys, time
 from datetime import datetime, timedelta, date
 from io import StringIO
 
@@ -202,14 +202,22 @@ def fetch(station, sensor, dur, start, end, retries=5):
             continue
     return rows
 
-def cache_is_final(blob, wy, dur):
-    """True if a cached file actually covers the whole water year.
+CACHE_SETTLE_DAYS = 60   # after Sep 30, a record still short is short at CDEC
 
-    A cache written mid-year is missing that year's final days. Trusting it
-    the moment the WY rolls over — which is what a bare os.path.exists check
-    does — freezes those missing days in permanently, a few more every year.
+
+def cache_is_final(blob, wy, dur):
+    """True if a cached completed water year can be used without re-fetching.
+
+    It can if its readings run to the end of the water year, or if it was
+    fetched at least CACHE_SETTLE_DAYS after Sep 30 (a record still short by
+    then is short at the source, such as a gauge that was down). A cache
+    written mid-year is missing the year's last days, and a monthly station's
+    September total posts weeks after Sep 30: trusting a bare 'final' flag
+    froze Chico Univ Farm's WY2026 without September.
     """
-    if blob.get('final'):
+    fetched_on = blob.get('fetched_on')
+    if fetched_on and date.fromisoformat(fetched_on) >= (
+            date(wy, 9, 30) + timedelta(days=CACHE_SETTLE_DAYS)):
         return True
     rows = blob.get('rows') or []
     if not rows:
@@ -259,8 +267,27 @@ def fetch_or_cache(code, wy, meta):
     rows = fetch(code, meta['sensor'], meta['dur'], start, end)
     with open(path, 'w') as f:
         json.dump({'rows': rows, 'station': code, 'wy': wy,
-                   'final': is_completed_wy(wy)}, f)
+                   'final': is_completed_wy(wy),
+                   'fetched_on': date.today().isoformat()}, f)
     return apply_gauge_fixes(code, rows), 'fetched'
+
+# ------- Day of the water year -------
+WY_DAYS = 365
+
+
+def wy_day_index(d, wy):
+    """Day of the water year, Oct 1 = 0, on a 365-day calendar.
+
+    In a leap year every date from March 1 on would otherwise sit one slot
+    later than the same date in other years, so an average would mix Mar 1
+    with Mar 2. Feb 29 shares Feb 28's slot, which then holds the running
+    total through Feb 29.
+    """
+    idx = (d - date(wy - 1, 10, 1)).days
+    if calendar.isleap(wy) and d >= date(wy, 2, 29):
+        idx -= 1
+    return idx
+
 
 # ------- Spike filter + cumulative calc -------
 def clean_spikes(parsed):
@@ -290,7 +317,7 @@ def process_accumulated(rows, wy):
             continue
     parsed.sort()
     if not parsed:
-        return [None] * 366
+        return [None] * WY_DAYS
     parsed = clean_spikes(parsed)
     cumulative = 0.0
     last_val = parsed[0][1]
@@ -298,8 +325,8 @@ def process_accumulated(rows, wy):
     for dt, v in parsed:
         d = dt.date()
         if d < start: continue
-        day_idx = (d - start).days
-        if day_idx < 0 or day_idx > 365: continue
+        day_idx = wy_day_index(d, wy)
+        if day_idx < 0 or day_idx >= WY_DAYS: continue
         diff = v - last_val
         if diff < -1.0:
             pass  # gauge reset — rebaseline without crediting negative
@@ -307,10 +334,10 @@ def process_accumulated(rows, wy):
             cumulative += diff
         last_val = v
         daily_cum[day_idx] = cumulative
-    result = [None] * 366
+    result = [None] * WY_DAYS
     cur = 0.0
     seen = False
-    for i in range(366):
+    for i in range(WY_DAYS):
         if i in daily_cum:
             cur = daily_cum[i]; seen = True; result[i] = round(cur, 2)
         else:
@@ -411,8 +438,8 @@ def process_monthly(rows, wy):
             month_totals[(dt.year, dt.month)] = float(r[1])
         except Exception:
             continue
-    result = [None] * 366
-    for i in range(366):
+    result = [None] * WY_DAYS
+    for i in range((date(wy, 9, 30) - start).days + 1):
         d = start + timedelta(days=i)
         first_of = date(d.year, d.month, 1)
         nextm = date(d.year+1, 1, 1) if d.month == 12 else date(d.year, d.month+1, 1)
@@ -424,7 +451,7 @@ def process_monthly(rows, wy):
             prior += month_totals.get((cur_d.year, cur_d.month), 0.0)
             cur_d = date(cur_d.year+1, 1, 1) if cur_d.month == 12 else date(cur_d.year, cur_d.month+1, 1)
         frac = d.day / days_in_month
-        result[i] = round(prior + frac * month_val, 2)
+        result[wy_day_index(d, wy)] = round(prior + frac * month_val, 2)
     return result
 
 # ------- Dashboard rebuild -------
@@ -438,7 +465,7 @@ def build_data():
     cache_count = 0
     for code, meta in STATIONS.items():
         print(f'\n{code} ({meta["name"]}):')
-        station_data = {'meta': {k: meta[k] for k in ['name','elevation','lat','lon','operator','kind']},
+        station_data = {'meta': {k: meta[k] for k in ['name','elevation','lat','lon','operator','kind','dur']},
                         'noaa': NOAA.get(code),
                         'years': {}}
         for wy in water_years:
@@ -451,9 +478,8 @@ def build_data():
                 arr = process_monthly(rows, wy)
             # Trim current WY to today
             if wy == end_wy:
-                wy_start = date(wy-1, 10, 1)
-                days_elapsed = (today - wy_start).days
-                for i in range(days_elapsed + 1, 366):
+                days_elapsed = wy_day_index(today, wy)
+                for i in range(days_elapsed + 1, WY_DAYS):
                     arr[i] = None
             valid = [v for v in arr if v is not None]
             total = max(valid) if valid else 0.0
@@ -480,7 +506,7 @@ def build_data():
         ys = [y for y in complete_ys if sdata['years'].get(y, {}).get('complete')]
         sdata['avg_years'] = [int(ys[0]), int(ys[-1]), len(ys)] if ys else None
         averages = []
-        for day_idx in range(366):
+        for day_idx in range(WY_DAYS):
             vals = []
             for y in ys:
                 v = sdata['years'][y]['cumulative_daily'][day_idx]
@@ -524,7 +550,7 @@ def build_data():
                 compare[p['key']] = None
                 continue
             compare[p['key']] = [round(sum(arrays[y][i] for y in ys) / len(ys), 2)
-                                 for i in range(366)]
+                                 for i in range(WY_DAYS)]
         sdata['compare'] = compare
 
     print(f'\nSummary: {fetch_count} fetched, {cache_count} cached')
