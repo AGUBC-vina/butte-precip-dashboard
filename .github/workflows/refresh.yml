@@ -6,7 +6,7 @@ on:
   # every day through April 1, 2027.
   workflow_dispatch:
   # Daily backup run at 18:00 UTC (10am PST / 11am PDT) in case the Mac is off.
-  # GitHub starts scheduled runs late, often by 2 to 4 hours.
+  # GitHub starts scheduled runs late (2.5 to 7.5 hours in Oct-Nov 2026).
   # After April 1, 2027 the gate below lets scheduled runs through on Sundays only.
   schedule:
     - cron: '0 18 * * *'

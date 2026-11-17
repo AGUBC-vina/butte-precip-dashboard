@@ -16,6 +16,12 @@ re-fetched, so CDEC is hit with minimal traffic (5 requests per refresh).
 """
 import calendar, csv, json, os, re, sys, time
 from datetime import datetime, timedelta, date
+
+# "Today" is the Pacific date wherever this runs. GitHub's servers run on UTC,
+# so a run after 4pm Pacific would otherwise count tomorrow as today and
+# compare this year with tomorrow's average (seen on the 2026-11-17 01:35 UTC run).
+os.environ['TZ'] = 'America/Los_Angeles'
+time.tzset()
 from io import StringIO
 
 try:

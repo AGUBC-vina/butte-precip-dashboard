@@ -24,13 +24,33 @@ Through April 1, 2027 the dashboard refreshes daily at 10am Pacific: a
 scheduled job on a Mac starts the GitHub Actions workflow
 (`.github/workflows/refresh.yml`) at 10:00. The workflow also has its own
 daily schedule at 18:00 UTC as a backup; GitHub starts scheduled runs late,
-often by two to four hours. After April 1, 2027 the backup schedule lets runs
+by 2.5 to 7.5 hours in October and November 2026. After April 1, 2027 the backup schedule lets runs
 through on Sundays only. To trigger an on-demand refresh, go to the
 [Actions tab](https://github.com/AGUBC-vina/butte-precip-dashboard/actions/workflows/refresh.yml)
 and click "Run workflow."
 
 The page works out the current water year from the data, so no year needs
 changing when a new water year starts on October 1.
+
+`refresh_dashboard.py` sets its clock to Pacific time before it does
+anything, so "today" is the Pacific date wherever it runs. GitHub's servers
+run on UTC; without this, a run after 4pm Pacific counted tomorrow as today
+and compared the current year with tomorrow's average.
+
+## Saving and printing charts
+
+Each station chart and the Water Year Totals chart has two buttons:
+
+- **Save PNG** downloads the chart as an image, named for the station, water
+  year and refresh date (for example `butte-precip-CST-WY2027-2026-11-16.png`).
+- **Print / PDF** prints only that chart on one landscape letter page; choose
+  "Save as PDF" in the print window for a PDF.
+
+Both draw the chart as it is set on the page (water year, comparison period,
+average line on or off, station filter for the totals chart), with a title
+above it and a source footer below it: CDEC as the data source with the
+refresh time, and AGUBC with the dashboard address for the averages and
+chart. The export code is in `index.html` under "Chart export".
 
 ## Historical average
 
