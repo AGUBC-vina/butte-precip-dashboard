@@ -269,7 +269,10 @@ def fetch_or_cache(code, wy, meta):
             return apply_gauge_fixes(code, blob['rows']), 'cached'
     # Current WY, missing cache, or a cache that stopped short of Sep 30
     start = f'{wy-1}-10-01'
-    end = min(f'{wy}-09-30', date.today().isoformat())
+    # CDEC's End date stops at 00:00 that day (End=2026-11-16 returned nothing
+    # after 11/16 00:00, checked 2026-11-16), so the current year asks through
+    # tomorrow to get today's readings. Completed years keep the Sep 30 end.
+    end = min(f'{wy}-09-30', (date.today() + timedelta(days=1)).isoformat())
     rows = fetch(code, meta['sensor'], meta['dur'], start, end)
     with open(path, 'w') as f:
         json.dump({'rows': rows, 'station': code, 'wy': wy,

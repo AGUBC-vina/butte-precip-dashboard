@@ -35,7 +35,9 @@ changing when a new water year starts on October 1.
 `refresh_dashboard.py` sets its clock to Pacific time before it does
 anything, so "today" is the Pacific date wherever it runs. GitHub's servers
 run on UTC; without this, a run after 4pm Pacific counted tomorrow as today
-and compared the current year with tomorrow's average.
+and compared the current year with tomorrow's average. CDEC's End date stops
+at midnight at the start of that day, so the current water year is requested
+through tomorrow to include today's readings so far.
 
 ## Saving and printing charts
 
